@@ -1,6 +1,7 @@
 import streamlit as st
 import mysql.connector
 from mysql.connector import Error
+from functions import fetch_logs_for_service
 import bcrypt
 import json
 from functions import (
@@ -8,10 +9,12 @@ from functions import (
     analyze_auth_service_logs,
     alert_by_domain,
     alert_by_reason,
+    load_user_services,
+    save_user_services,
 )
+
 from requests.auth import HTTPBasicAuth
 import requests
-
 
 # Set page configuration
 st.set_page_config(
@@ -30,7 +33,7 @@ st.markdown(
         border-radius: 12px;
     }
     </style>
-    """, 
+    """,
     unsafe_allow_html=True
 )
 
@@ -59,17 +62,18 @@ def authenticate_user(username, password):
         cursor = conn.cursor(dictionary=True)
         cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
         user = cursor.fetchone()
-        conn.close()
 
         if user and bcrypt.checkpw(password.encode(), user['password'].encode()):
             st.session_state.username = username
-            load_user_services(username)
+            st.session_state.service_list = load_user_services(username, conn)
             return True
     except Error as e:
         st.error(f"Authentication error: {e}")
+    finally:
+        conn.close()
     return False
 
-# ---------------- Check if User Exists ---------------- #
+
 def user_exists(username):
     conn = create_connection()
     if not conn:
@@ -84,7 +88,6 @@ def user_exists(username):
         st.error(f"Error checking user: {e}")
         return False
 
-# ---------------- Register New User ---------------- #
 def register_user(username, password):
     conn = create_connection()
     if not conn:
@@ -95,17 +98,17 @@ def register_user(username, password):
         hashed_password = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
         cursor.execute("INSERT INTO users (username, password) VALUES (%s, %s)", (username, hashed_password))
         conn.commit()
-        conn.close()
+        
         st.session_state.username = username
         st.session_state.service_list = []
-        save_user_services(username)
+        save_user_services(username, st.session_state.service_list, conn)
+        conn.close()
 
         return True
     except Error as e:
         st.error(f"Registration error: {e}")
         return False
 
-# ---------------- Login UI ---------------- #
 def login_ui():
     st.title('Login')
 
@@ -126,7 +129,6 @@ def login_ui():
         st.session_state.step = 'register'
         st.rerun()
 
-# ---------------- Register UI ---------------- #
 def register_ui():
     st.title('Register New Account')
 
@@ -149,42 +151,7 @@ def register_ui():
         st.rerun()
 
 
-# Load services from DB into session
-def load_user_services(username):
-    conn = create_connection()
-    if conn:
-        try:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT services FROM user_services WHERE username = %s", (username,))
-            row = cursor.fetchone()
-            conn.close()
-            if row and row['services']:
-                st.session_state.service_list = json.loads(row['services'])
-            else:
-                st.session_state.service_list = []
-        except Error as e:
-            st.error(f"Error loading services: {e}")
-
-# Save services from session to DB
-def save_user_services(username):
-    conn = create_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            services_json = json.dumps(st.session_state.service_list)
-
-            # UPSERT (insert or update)
-            cursor.execute("""
-                INSERT INTO user_services (username, services) 
-                VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE services = VALUES(services)
-            """, (username, services_json))
-            conn.commit()
-            conn.close()
-        except Error as e:
-            st.error(f"Error saving services: {e}")
-
-
+# ---------------- Dashboard UI ---------------- #
 def dashboard_ui():
     st.title(f"Welcome, {st.session_state.username} 👋")
 
@@ -204,7 +171,12 @@ def dashboard_ui():
 
     with col2:
         if st.button("Logout"):
-            save_user_services(st.session_state.username)
+            conn = create_connection()
+            if conn:
+                try:
+                    save_user_services(st.session_state.username, st.session_state.service_list, conn)
+                finally:
+                    conn.close()
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
@@ -212,92 +184,217 @@ def dashboard_ui():
     st.markdown("---")
     st.subheader("Your Microservices")
 
+    # ---------------- Existing Microservice UI ----------------
+
     for service in st.session_state.service_list:
-        col1, col2 = st.columns([4, 1])
+        col1, col2, col3 = st.columns([4, 1, 1])
         with col1:
-            st.button(service, key=f"btn-{service}")
+            st.write(service)
         with col2:
+            if st.button("View", key=f"view-{service}"):
+                st.session_state.selected_service = service
+                st.rerun()
+        with col3:
             if st.button("❌", key=f"del-{service}"):
                 st.session_state.service_list.remove(service)
                 st.success(f"Removed {service}")
                 st.rerun()
 
     st.markdown("---")
-    st.subheader("📊 Log Analysis")
+    st.subheader("⚙️ Manage Background Jobs")
 
-    if st.button("Fetch & Analyze Logs"):
-        with st.spinner("Fetching logs from Graylog..."):
+    # ---------------- Fetch Background Jobs ----------------
 
-            # Graylog API setup
-            graylog_url = "http://localhost:9000/api/search/universal/relative"
-            auth = HTTPBasicAuth("admin", "1q2w3e4r5t6y7u8i9o0p")
-            headers = {
-                "Accept": "application/json",
-                "X-Requested-By": "streamlit"
-            }
-            params = {
-                "query": "status:ERROR",
-                "range": 360,
-                "decorate": "true"
-            }
+    jobs = []
+    conn = create_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM background_jobs WHERE username = %s", (st.session_state.username,))
+            jobs = cursor.fetchall()
+            conn.close()
+        except Error as e:
+            st.error(f"Error fetching background jobs: {e}")
 
-            response = requests.get(graylog_url, auth=auth, headers=headers, params=params)
+    # ---------------- Display Background Jobs ----------------
 
-            if response.status_code == 200:
-                data = response.json().get("messages", [])
-                
-                # Dynamic grouping of logs by user-defined services
-                service_logs = {svc: [] for svc in st.session_state.service_list}
-                for entry in data:
-                    msg = entry.get("message", {})
-                    service = msg.get("service")
-                    if service in st.session_state.service_list:
-                        service_logs[service].append(msg)
+    if jobs:
+        for job in jobs:
+            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+            with col1:
+                st.write(f"🔄 `{job['service_name']}` every {job['interval_minutes']} min")
+            with col2:
+                st.write(f"Alert: {'✅' if job['alert_enabled'] else '❌'}")
+            with col3:
+                st.write(f"Enabled: {'🟢' if job['enabled'] else '🔴'}")
+            with col4:
+                if st.button("🗑️", key=f"del-{job['id']}"):
+                    conn = create_connection()
+                    if conn:
+                        try:
+                            cur = conn.cursor()
+                            cur.execute("DELETE FROM background_jobs WHERE id = %s", (job["id"],))
+                            conn.commit()
+                            conn.close()
+                            st.success("Deleted job.")
+                            st.rerun()
+                        except Error as e:
+                            st.error(f"Error deleting job: {e}")
 
-                # Analyze logs per service
-                for service, logs in service_logs.items():
-                    if not logs:
-                        st.info(f"No logs for `{service}`.")
-                        continue
+    # ---------------- Create Background Job Form ----------------
 
-                    st.markdown(f"### 🔹 Logs for `{service}`")
+    st.markdown("### ➕ Create New Background Job")
 
-                    # Dynamic detection of analysis type based on service name
-                    if "auth" in service.lower():
-                        result = analyze_auth_service_logs(logs)
-                        st.write("**Users with Excessive Failures:**")
-                        for user, count in result["Users with Excessive Failures"]:
-                            st.warning(f"{user} → {count} failed attempts")
-                        st.write("**Common Failure Reasons:**")
-                        for reason, freq in result["Common Failure Reasons"]:
-                            st.info(f"'{reason}' occurred {freq} times")
+    alert_enabled = st.checkbox("Enable Alerts")
 
-                    elif "firewall" in service.lower():
-                        result = analyze_firewall_logs(logs)
-                        for k, v in result.items():
-                            st.write(f"**{k}:** {v}")
+    with st.form("job_form"):
+        selected_service = st.selectbox("Microservice", st.session_state.service_list)
+        analysis_type = st.selectbox("Analysis Type", ["failed_logins", "high_threat_protocol", "dns_alerts"])
+        interval = st.selectbox("Interval (minutes)", [5, 15, 30, 60])
 
-                    elif "dns" in service.lower():
-                        domain_alerts = alert_by_domain(logs)
-                        reason_alerts = alert_by_reason(logs)
-                        for alert in domain_alerts + reason_alerts:
-                            st.error(alert)
+        alert_channel = st.selectbox("Alert Channel", ["email", "slack"]) if alert_enabled else ""
+        alert_target = st.text_input("Alert Target") if alert_enabled else ""
 
-                    else:
-                        st.write(f"No specific analysis defined for `{service}`.")
-                        st.json(logs[:3])  # Just show a few raw logs
-            else:
-                st.error(f"Failed to fetch logs: {response.status_code}")
-                st.text(response.text)
+        submit = st.form_submit_button("Create Job")
 
+        if submit:
+            conn = create_connection()
+            if conn:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO background_jobs (
+                            username, service_name, analysis_type, interval_minutes, 
+                            alert_enabled, alert_channel, alert_target
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        st.session_state.username, selected_service, analysis_type, interval,
+                        alert_enabled, alert_channel, alert_target
+                    ))
+                    conn.commit()
+                    conn.close()
+                    st.success("Background job created!")
+                    st.rerun()
+                except Error as e:
+                    st.error(f"Error creating job: {e}")
 
+# ---------------- Service Detail UI ---------------- #
+def service_detail_ui(service_name):
+    st.title(f"🔍 Logs for `{service_name}`")
 
+    if st.button("⬅️ Back to Dashboard"):
+        st.session_state.selected_service = None
+        st.rerun()
+
+    st.markdown("---")
+
+    with st.spinner("Fetching logs from Graylog..."):
+        try:
+            service_logs = fetch_logs_for_service(service_name, range_minutes=360)
+        except Exception as e:
+            st.error(str(e))
+            return
+
+    if not service_logs:
+        st.info(f"No logs found for `{service_name}`.")
+        return
+
+    # AUTH service analysis
+    if "auth" in service_name.lower():
+        result = analyze_auth_service_logs(service_logs)
+
+        st.subheader("🚨 Users with Excessive Failures")
+        if result["Users with Excessive Failures"]:
+            for user, count in result["Users with Excessive Failures"]:
+                st.warning(f"{user} → {count} failed attempts")
+                with st.expander(f"View error logs for {user}"):
+                    user_logs = result["Error Logs By User"].get(user, [])
+                    for log in user_logs:
+                        st.json(log)
+        else:
+            st.success("No users exceeded the failure threshold.")
+
+        st.subheader("📊 Common Failure Reasons")
+        if result["Common Failure Reasons"]:
+            for reason, freq in result["Common Failure Reasons"]:
+                st.info(f"'{reason}' occurred {freq} times")
+                with st.expander(f"View logs for reason: '{reason}'"):
+                    reason_logs = result["Error Logs By Reason"].get(reason, [])
+                    for log in reason_logs:
+                        st.json(log)
+        else:
+            st.write("No failure reasons found.")
+
+    # FIREWALL service analysis
+    elif "firewall" in service_name.lower():
+        result = analyze_firewall_logs(service_logs)
+
+        st.subheader("🛡️ Firewall Threat Summary")
+        st.write(f"**Low Threat Logs Count:** {result['Low Threat Logs Count']}")
+        st.write(f"**Medium Threat Logs Count:** {result['Medium Threat Logs Count']}")
+        st.write(f"**Most Common High Threat Protocol:** {result['Most Common High Threat Protocol']}")
+
+        st.markdown("### 🔸 Low Threat Logs")
+        if result["low_threat_logs"]:
+            with st.expander(f"View {len(result['low_threat_logs'])} Low Threat Logs"):
+                for log in result["low_threat_logs"]:
+                    st.json(log)
+        else:
+            st.success("No low threat logs.")
+
+        st.markdown("### 🔸 Medium Threat Logs")
+        if result["med_threat_logs"]:
+            with st.expander(f"View {len(result['med_threat_logs'])} Medium Threat Logs"):
+                for log in result["med_threat_logs"]:
+                    st.json(log)
+        else:
+            st.success("No medium threat logs.")
+
+        st.markdown("### 🔸 High Threat Logs")
+        if result["high_threat_logs"]:
+            with st.expander(f"View {len(result['high_threat_logs'])} High Threat Logs"):
+                for log in result["high_threat_logs"]:
+                    st.json(log)
+        else:
+            st.success("No high threat logs.")
+
+    # DNS service analysis
+    elif "dns" in service_name.lower():
+        st.subheader("🛑 DNS Alert Reports")
+
+        domain_alerts = alert_by_domain(service_logs)
+        reason_alerts = alert_by_reason(service_logs)
+
+        st.markdown("### ⚠️ Domain Alerts")
+        if domain_alerts:
+            for alert in domain_alerts:
+                st.error(alert["message"])
+                with st.expander(f"View logs for domain: '{alert['domain']}'"):
+                    for log in alert["logs"]:
+                        st.json(log)
+        else:
+            st.success("No domain alerts.")
+
+        st.markdown("### ⚠️ Reason Alerts")
+        if reason_alerts:
+            for alert in reason_alerts:
+                st.error(alert["message"])
+                with st.expander(f"View logs for reason: '{alert['reason']}'"):
+                    for log in alert["logs"]:
+                        st.json(log)
+        else:
+            st.success("No reason alerts.")
+
+    else:
+        st.write(f"No specific analysis defined for `{service_name}`.")
+        st.json(service_logs[:5])
 
 # ---------------- Navigation Logic ---------------- #
 if 'step' not in st.session_state:
     st.session_state.step = 'login'
-
-if st.session_state.step == 'login':
+if 'selected_service' in st.session_state and st.session_state.selected_service:
+    service_detail_ui(st.session_state.selected_service)
+elif st.session_state.step == 'login':
     login_ui()
 elif st.session_state.step == 'register':
     register_ui()
