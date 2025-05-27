@@ -1,16 +1,12 @@
 import streamlit as st
 import mysql.connector
 from mysql.connector import Error
-from functions import fetch_logs_for_service
 import bcrypt
 import json
 from functions import (
-    analyze_firewall_logs,
-    analyze_auth_service_logs,
-    alert_by_domain,
-    alert_by_reason,
     load_user_services,
     save_user_services,
+    ANALYSIS_HANDLERS,
 )
 
 from requests.auth import HTTPBasicAuth
@@ -222,7 +218,7 @@ def dashboard_ui():
         for job in jobs:
             col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
             with col1:
-                st.write(f"🔄 `{job['service_name']}` every {job['interval_minutes']} min")
+                st.write(f"🔄 `{job['service_name']}` every {job['interval_seconds']} min")
             with col2:
                 st.write(f"Alert: {'✅' if job['alert_enabled'] else '❌'}")
             with col3:
@@ -242,18 +238,63 @@ def dashboard_ui():
                             st.error(f"Error deleting job: {e}")
 
     # ---------------- Create Background Job Form ----------------
-
     st.markdown("### ➕ Create New Background Job")
 
-    alert_enabled = st.checkbox("Enable Alerts")
+    if not st.session_state.service_list:
+        st.info("Add at least one microservice to create a background job.")
+        return
 
+    selected_service = st.selectbox("Microservice", st.session_state.service_list)
+
+    # Ask user if they want alert-capable analyses only
+    alertable_only = st.checkbox("Show only alert-capable analyses?")
+
+    # Filter analysis types dynamically
+    available_analysis = {
+        key: val for key, val in ANALYSIS_HANDLERS.items()
+        if (selected_service in val["services"] or "*" in val["services"])
+        and (not alertable_only or val.get("alertable", False))
+    }
+
+    if not available_analysis:
+        st.warning("No available analyses for this service with selected filter.")
+        return
+
+    analysis_type_key = st.selectbox(
+        "Analysis Type",
+        list(available_analysis.keys()),
+        format_func=lambda k: available_analysis[k]["label"]
+    )
+
+    selected_handler = available_analysis[analysis_type_key]
+
+
+    # Now the form begins
     with st.form("job_form"):
-        selected_service = st.selectbox("Microservice", st.session_state.service_list)
-        analysis_type = st.selectbox("Analysis Type", ["failed_logins", "high_threat_protocol", "dns_alerts"])
-        interval = st.selectbox("Interval (minutes)", [5, 15, 30, 60])
+        interval = st.number_input("Interval (in seconds)", min_value=5, max_value=86400, value=60, step=1)
 
-        alert_channel = st.selectbox("Alert Channel", ["email", "slack"]) if alert_enabled else ""
-        alert_target = st.text_input("Alert Target") if alert_enabled else ""
+        alert_enabled = False
+        alert_channel = ""
+        alert_target = ""
+
+        if alertable_only:  # If 'Show only alert-capable analyses' is checked, automatically enable alerts
+            alert_enabled = True  # Enable alerts automatically
+            alert_channel = st.selectbox("Alert Channel", ["email", "slack"])
+            alert_target = st.text_input("Alert Target (email or webhook)")
+        elif selected_handler.get("alertable", False):  # Keep the previous behavior for non-alertable analyses
+            alert_enabled = st.checkbox("Enable Alerts?")
+            if alert_enabled:
+                alert_channel = st.selectbox("Alert Channel", ["email", "slack"])
+                alert_target = st.text_input("Alert Target (email or webhook)")
+
+        # Optional config (for generic search)
+        custom_config = {}
+        if selected_handler.get("configurable"):
+            field = st.text_input("Field to search within (e.g., status)", value="status")
+            keyword = st.text_input("Keyword to search for", value="error")
+            custom_config["field"] = field
+            custom_config["keyword"] = keyword
+
 
         submit = st.form_submit_button("Create Job")
 
@@ -264,11 +305,11 @@ def dashboard_ui():
                     cursor = conn.cursor()
                     cursor.execute("""
                         INSERT INTO background_jobs (
-                            username, service_name, analysis_type, interval_minutes, 
+                            username, service_name, analysis_type, interval_seconds,
                             alert_enabled, alert_channel, alert_target
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """, (
-                        st.session_state.username, selected_service, analysis_type, interval,
+                        st.session_state.username, selected_service, analysis_type_key, interval,
                         alert_enabled, alert_channel, alert_target
                     ))
                     conn.commit()
@@ -278,7 +319,6 @@ def dashboard_ui():
                 except Error as e:
                     st.error(f"Error creating job: {e}")
 
-# ---------------- Service Detail UI ---------------- #
 def service_detail_ui(service_name):
     st.title(f"🔍 Logs for `{service_name}`")
 
@@ -288,106 +328,76 @@ def service_detail_ui(service_name):
 
     st.markdown("---")
 
-    with st.spinner("Fetching logs from Graylog..."):
-        try:
-            service_logs = fetch_logs_for_service(service_name, range_minutes=360)
-        except Exception as e:
-            st.error(str(e))
-            return
+    st.markdown("### 🔍 Select Analysis Type")
 
-    if not service_logs:
-        st.info(f"No logs found for `{service_name}`.")
+    # Find applicable analysis handlers for this service
+    applicable_analyses = {
+        key: cfg for key, cfg in ANALYSIS_HANDLERS.items()
+        if service_name in cfg["services"] or "*" in cfg["services"]
+    }
+
+    if not applicable_analyses:
+        st.info("No analysis options available for this service.")
         return
 
-    # AUTH service analysis
-    if "auth" in service_name.lower():
-        result = analyze_auth_service_logs(service_logs)
+    selected_key = st.selectbox(
+        "Choose an analysis",
+        list(applicable_analyses.keys()),
+        format_func=lambda k: applicable_analyses[k]["label"]
+    )
 
-        st.subheader("🚨 Users with Excessive Failures")
-        if result["Users with Excessive Failures"]:
-            for user, count in result["Users with Excessive Failures"]:
-                st.warning(f"{user} → {count} failed attempts")
-                with st.expander(f"View error logs for {user}"):
-                    user_logs = result["Error Logs By User"].get(user, [])
-                    for log in user_logs:
-                        st.json(log)
-        else:
-            st.success("No users exceeded the failure threshold.")
+    range_seconds = st.slider("Log Time Range (seconds)", 60, 3600, 360)
 
-        st.subheader("📊 Common Failure Reasons")
-        if result["Common Failure Reasons"]:
-            for reason, freq in result["Common Failure Reasons"]:
-                st.info(f"'{reason}' occurred {freq} times")
-                with st.expander(f"View logs for reason: '{reason}'"):
-                    reason_logs = result["Error Logs By Reason"].get(reason, [])
-                    for log in reason_logs:
-                        st.json(log)
-        else:
-            st.write("No failure reasons found.")
+    threshold = None
+    if selected_key == "failed_logins":
+        threshold = st.number_input("Login Failure Threshold", min_value=1, value=3)
 
-    # FIREWALL service analysis
-    elif "firewall" in service_name.lower():
-        result = analyze_firewall_logs(service_logs)
+    if st.button("Run Analysis"):
+        with st.spinner("Contacting server..."):
+            try:
+                payload = {
+                    "service_name": service_name,
+                    "range_seconds": range_seconds
+                }
+                if threshold:
+                    payload["threshold"] = threshold
 
-        st.subheader("🛡️ Firewall Threat Summary")
-        st.write(f"**Low Threat Logs Count:** {result['Low Threat Logs Count']}")
-        st.write(f"**Medium Threat Logs Count:** {result['Medium Threat Logs Count']}")
-        st.write(f"**Most Common High Threat Protocol:** {result['Most Common High Threat Protocol']}")
+                response = requests.post(
+                    f"http://localhost:8000/manual-analyze/{selected_key}",
+                    json=payload
+                )
 
-        st.markdown("### 🔸 Low Threat Logs")
-        if result["low_threat_logs"]:
-            with st.expander(f"View {len(result['low_threat_logs'])} Low Threat Logs"):
-                for log in result["low_threat_logs"]:
-                    st.json(log)
-        else:
-            st.success("No low threat logs.")
+                if response.status_code != 200:
+                    st.error(f"Server error: {response.status_code} - {response.text}")
+                    return
 
-        st.markdown("### 🔸 Medium Threat Logs")
-        if result["med_threat_logs"]:
-            with st.expander(f"View {len(result['med_threat_logs'])} Medium Threat Logs"):
-                for log in result["med_threat_logs"]:
-                    st.json(log)
-        else:
-            st.success("No medium threat logs.")
+                data = response.json()
 
-        st.markdown("### 🔸 High Threat Logs")
-        if result["high_threat_logs"]:
-            with st.expander(f"View {len(result['high_threat_logs'])} High Threat Logs"):
-                for log in result["high_threat_logs"]:
-                    st.json(log)
-        else:
-            st.success("No high threat logs.")
+                if "error" in data:
+                    st.error(data["error"])
+                elif "message" in data:
+                    st.info(data["message"])
+                else:
+                    result = data.get("result", {})
+                    st.markdown(f"## 📊 {applicable_analyses[selected_key]['label']}")
+                    for key, val in result.items():
+                        st.markdown(f"### {key}")
+                        if isinstance(val, list):
+                            if val and isinstance(val[0], dict):
+                                with st.expander(f"View {len(val)} items"):
+                                    for item in val:
+                                        st.json(item)
+                            elif val:
+                                st.write(", ".join(str(x) for x in val))
+                            else:
+                                st.success("No relevant data.")
+                        else:
+                            st.write(val)
 
-    # DNS service analysis
-    elif "dns" in service_name.lower():
-        st.subheader("🛑 DNS Alert Reports")
+            except Exception as e:
+                st.error(f"Request failed: {e}")
 
-        domain_alerts = alert_by_domain(service_logs)
-        reason_alerts = alert_by_reason(service_logs)
 
-        st.markdown("### ⚠️ Domain Alerts")
-        if domain_alerts:
-            for alert in domain_alerts:
-                st.error(alert["message"])
-                with st.expander(f"View logs for domain: '{alert['domain']}'"):
-                    for log in alert["logs"]:
-                        st.json(log)
-        else:
-            st.success("No domain alerts.")
-
-        st.markdown("### ⚠️ Reason Alerts")
-        if reason_alerts:
-            for alert in reason_alerts:
-                st.error(alert["message"])
-                with st.expander(f"View logs for reason: '{alert['reason']}'"):
-                    for log in alert["logs"]:
-                        st.json(log)
-        else:
-            st.success("No reason alerts.")
-
-    else:
-        st.write(f"No specific analysis defined for `{service_name}`.")
-        st.json(service_logs[:5])
 
 # ---------------- Navigation Logic ---------------- #
 if 'step' not in st.session_state:
