@@ -121,7 +121,7 @@ def alert_by_domain(logs):
                 })
     return alerts
 
-def fetch_logs_for_service(service_name, range_minutes=60, query="status:ERROR"):
+def fetch_logs_for_service(service_name, range_seconds=360, query="status:ERROR"):
     graylog_url = "http://localhost:9000/api/search/universal/relative"
     auth = HTTPBasicAuth("admin", "1q2w3e4r5t6y7u8i9o0p")
     headers = {
@@ -130,7 +130,7 @@ def fetch_logs_for_service(service_name, range_minutes=60, query="status:ERROR")
     }
     params = {
         "query": query,
-        "range": range_minutes,
+        "range": range_seconds,
         "decorate": "true"
     }
     response = requests.get(graylog_url, auth=auth, headers=headers, params=params)
@@ -169,4 +169,35 @@ def save_user_services(username, services, conn):
         conn.commit()
     except Exception as e:
         raise e
-
+def generic_log_count_analysis():{}
+# ----------------- Analysis Config (Central Dictionary) ----------------- #
+ANALYSIS_HANDLERS = {
+    "failed_logins": {
+        "label": "Failed Logins (Auth)",
+        "services": ["auth-service"],
+        "alertable": True,
+        "func": analyze_auth_service_logs
+    },
+    "high_threat_protocol": {
+        "label": "High Threat Protocols (Firewall)",
+        "services": ["firewall-service"],
+        "alertable": True,
+        "func": analyze_firewall_logs
+    },
+    "dns_alerts": {
+        "label": "Domain and Reason Alerts (DNS)",
+        "services": ["dns-service"],
+        "alertable": True,
+        "func": lambda logs: {
+            "domain_alerts": alert_by_domain(logs),
+            "reason_alerts": alert_by_reason(logs)
+        }
+    },
+    "generic_log_search": {
+        "label": "Generic Log Pattern Count",
+        "services": ["*"],  # Wildcard: all services
+        "func": generic_log_count_analysis,
+        "alertable": False,
+        "configurable": True  # custom keyword supported
+    }
+}
