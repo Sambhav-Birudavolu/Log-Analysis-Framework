@@ -8,6 +8,7 @@ import json
 
 app = FastAPI()
 
+
 ### -------------------- Analysis Functions (copied in) -------------------- ###
 
 def analyze_firewall_logs(logs):
@@ -128,8 +129,31 @@ def fetch_logs_for_service(service_name, range_seconds=360, query="status:ERROR"
     else:
         raise Exception(f"Graylog API error {response.status_code}: {response.text}")
 
-def generic_log_count_analysis():
-    return {"status": "not implemented"}
+def generic_log_count_analysis(service_name="", field="", keyword="", range_seconds=360):
+    graylog_url = "http://localhost:9000/api/search/universal/relative"
+    query = f"{field}:{keyword}"
+    auth = HTTPBasicAuth("admin", "1q2w3e4r5t6y7u8i9o0p")
+    headers = {
+        "Accept": "application/json",
+        "X-Requested-By": "fastapi-service"
+    }
+    params = {
+        "query": query,
+        "range": range_seconds,
+        "decorate": "true"
+    }  
+    response = requests.get(graylog_url, auth=auth, headers=headers, params=params)
+    if response.status_code == 200:
+        data = response.json().get("messages", [])
+        filtered_logs = [msg.get("message", {}) for msg in data if msg.get("message", {}).get("service") == service_name]
+        return {
+            "Matched Logs Count": len(filtered_logs),
+            "Filtered Logs": filtered_logs,
+            "Query Used": query
+        }
+    else:
+        raise Exception(f"Graylog API error {response.status_code}: {response.text}")
+
 
 ANALYSIS_HANDLERS = {
     "failed_logins": {
@@ -186,7 +210,10 @@ async def analyze_background_job(job: JobRequest):
 class ManualAnalysisRequest(BaseModel):
     service_name: str
     range_seconds: Optional[int] = 360
-    threshold: Optional[int] = 3  # Only used for failed login type
+    threshold: Optional[int] = 3
+    field: Optional[str] = "status"
+    keyword: Optional[str] = "error"
+
 
 
 @app.post("/manual-analyze/{analysis_type}")
@@ -196,12 +223,21 @@ async def manual_analyze(analysis_type: str, request: ManualAnalysisRequest):
         return {"error": f"Unknown analysis type: {analysis_type}"}
 
     try:
-        logs = fetch_logs_for_service(request.service_name, range_seconds=request.range_seconds)
+        if analysis_type == "generic_log_search":
+            field = getattr(request, "field", "status")
+            keyword = getattr(request, "keyword", "error")
+            result = handler["func"](
+                service_name=request.service_name,
+                field=field,
+                keyword=keyword,
+                range_seconds=request.range_seconds
+            )
+            return {"status": "success", "result": result}
 
+        logs = fetch_logs_for_service(request.service_name, range_seconds=request.range_seconds)
         if not logs:
             return {"message": "No logs found for the given service and time range."}
 
-        # Handle function call with or without threshold parameter
         if analysis_type == "failed_logins":
             result = handler["func"](logs, threshold=request.threshold)
         else:
@@ -211,3 +247,4 @@ async def manual_analyze(analysis_type: str, request: ManualAnalysisRequest):
 
     except Exception as e:
         return {"error": str(e)}
+

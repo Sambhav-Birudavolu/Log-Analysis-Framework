@@ -3,14 +3,14 @@ import mysql.connector
 from mysql.connector import Error
 import bcrypt
 import json
+import requests
+from contextlib import contextmanager
+
 from functions import (
     load_user_services,
     save_user_services,
     ANALYSIS_HANDLERS,
 )
-
-from requests.auth import HTTPBasicAuth
-import requests
 
 # Set page configuration
 st.set_page_config(
@@ -349,8 +349,16 @@ def service_detail_ui(service_name):
     range_seconds = st.slider("Log Time Range (seconds)", 60, 3600, 360)
 
     threshold = None
+    custom_config = {}
+
+    # Handle config per analysis type
     if selected_key == "failed_logins":
         threshold = st.number_input("Login Failure Threshold", min_value=1, value=3)
+    elif selected_key == "generic_log_search":
+        field = st.text_input("Field to Search", value="status")
+        keyword = st.text_input("Keyword", value="error")
+        custom_config["field"] = field
+        custom_config["keyword"] = keyword
 
     if st.button("Run Analysis"):
         with st.spinner("Contacting server..."):
@@ -361,6 +369,8 @@ def service_detail_ui(service_name):
                 }
                 if threshold:
                     payload["threshold"] = threshold
+                if selected_key == "generic_log_search":
+                    payload.update(custom_config)
 
                 response = requests.post(
                     f"http://localhost:8000/manual-analyze/{selected_key}",
