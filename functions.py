@@ -2,6 +2,111 @@ from collections import Counter, defaultdict
 import requests
 from requests.auth import HTTPBasicAuth
 import json
+from datetime import datetime
+
+def ip_to_location(ip):
+    """Resolve public IP address to lat/lon using ip-api.com"""
+    try:
+        # Skip private IPs
+        if ip.startswith("192.") or ip.startswith("10.") or ip.startswith("172."):
+            return None
+        response = requests.get(f"http://ip-api.com/json/{ip}?fields=status,lat,lon,city,query")
+        data = response.json()
+        if data["status"] == "success":
+            return {
+                "ip": ip,
+                "lat": data["lat"],
+                "lon": data["lon"],
+                "city": data.get("city", "")
+            }
+    except Exception:
+        return None
+    return None
+
+def geo_map_failed_logins(logs):
+    """
+    Produces a world map data structure with failed login IP counts and locations.
+    """
+    ip_counts = defaultdict(int)
+    for log in logs:
+        if log.get("status") == "ERROR" and log.get("event_type") == "authentication_attempt":
+            ip = log.get("source_ip")
+            if ip:
+                ip_counts[ip] += 1
+
+    geo_data = []
+    for ip, count in ip_counts.items():
+        loc = ip_to_location(ip)
+        if loc:
+            loc["count"] = count
+            geo_data.append(loc)
+
+    return {
+        "Failed Login IPs": dict(ip_counts),
+        "Total Unique IPs": len(ip_counts),
+        "Geo Distribution": geo_data  # 🔥 for streamlit rendering
+    }
+
+
+def time_series_failed_logins(logs):
+    series = defaultdict(int)
+
+    for log in logs:
+        if log.get("status") == "ERROR" and log.get("event_type") == "authentication_attempt":
+            timestamp = log.get("timestamp")
+            if timestamp:
+                try:
+                    if timestamp.endswith("Z"):
+                        timestamp = timestamp[:-1]  # Remove 'Z'
+                    dt = datetime.fromisoformat(timestamp)
+                    bucket = dt.strftime("%Y-%m-%d %H:%M")
+                    series[bucket] += 1
+                except Exception as e:
+                    continue  # Handle malformed timestamps gracefully
+
+    return {
+        "Time Series": dict(sorted(series.items())),
+        "Total Buckets": len(series)
+    }
+
+
+def generic_time_series_analysis(service_name="", field="status", keyword="error", range_seconds=360):
+    graylog_url = "http://localhost:9000/api/search/universal/relative"
+    query = f"{field}:{keyword}"
+    auth = HTTPBasicAuth("admin", "admin")
+    headers = {
+        "Accept": "application/json",
+        "X-Requested-By": "fastapi-service"
+    }
+    params = {
+        "query": query,
+        "range": range_seconds,
+        "decorate": "true"
+    }
+    response = requests.get(graylog_url, auth=auth, headers=headers, params=params)
+    if response.status_code != 200:
+        raise Exception(f"Graylog API error {response.status_code}: {response.text}")
+
+    data = response.json().get("messages", [])
+    filtered_logs = [
+        msg.get("message", {}) for msg in data
+        if msg.get("message", {}).get("service") == service_name or service_name == "*"
+    ]
+
+    buckets = defaultdict(int)
+    for log in filtered_logs:
+        ts = log.get("timestamp")
+        if ts:
+            dt = datetime.fromtimestamp(float(ts))
+            bucket = dt.strftime("%Y-%m-%d %H:%M")
+            buckets[bucket] += 1
+
+    return {
+        "Time Series": dict(sorted(buckets.items())),
+        "Total Matches": len(filtered_logs),
+        "Query Used": query
+    }
+
 
 def analyze_firewall_logs(logs):
     low_threat_count = 0
@@ -104,7 +209,7 @@ def alert_by_domain(logs):
 
 def fetch_logs_for_service(service_name, range_seconds=360, query="status:ERROR"):
     graylog_url = "http://localhost:9000/api/search/universal/relative"
-    auth = HTTPBasicAuth("admin", "1q2w3e4r5t6y7u8i9o0p")
+    auth = HTTPBasicAuth("admin", "admin")
     headers = {
         "Accept": "application/json",
         "X-Requested-By": "fastapi-service"
@@ -124,7 +229,7 @@ def fetch_logs_for_service(service_name, range_seconds=360, query="status:ERROR"
 def generic_log_count_analysis(service_name="", field="", keyword="", range_seconds=360):
     graylog_url = "http://localhost:9000/api/search/universal/relative"
     query = f"{field}:{keyword}"
-    auth = HTTPBasicAuth("admin", "1q2w3e4r5t6y7u8i9o0p")
+    auth = HTTPBasicAuth("admin", "admin")
     headers = {
         "Accept": "application/json",
         "X-Requested-By": "fastapi-service"
@@ -186,7 +291,6 @@ def save_user_services(username, services, conn):
     except Exception as e:
         raise e
     
-# ----------------- Analysis Config (Central Dictionary) ----------------- #
 ANALYSIS_HANDLERS = {
     "failed_logins": {
         "label": "Failed Logins (Auth)",
@@ -211,9 +315,35 @@ ANALYSIS_HANDLERS = {
     },
     "generic_log_search": {
         "label": "Generic Log Pattern Count",
-        "services": ["*"],  # Wildcard: all services
+        "services": ["*"],
         "func": generic_log_count_analysis,
+        "manual_only": True,
+        "configurable": True
+    },
+    "log_pattern_timeseries": {
+        "label": "Time Series of Pattern Matches",
+        "services": ["*"],
+        "func": generic_time_series_analysis,
+        "manual_only": False,   # can now be used in background
+        "backgroundable": True,
         "alertable": False,
-        "configurable": True  # custom keyword supported
+        "configurable": True
+    },
+    "failed_login_geo_map": {
+        "label": "Geo Map of Failed Logins",
+        "services": ["auth-service"],
+        "func": geo_map_failed_logins,
+        "manual_only": True,
+        "alertable": False
+    },
+    "failed_login_timeseries": {
+        "label": "Time Series of Login Failures",
+        "services": ["auth-service"],
+        "func": time_series_failed_logins,
+        "manual_only": False,
+        "backgroundable": True,
+        "alertable": False
     }
 }
+
+
