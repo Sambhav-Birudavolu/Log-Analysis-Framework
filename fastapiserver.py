@@ -29,11 +29,6 @@ class JobRequest(BaseModel):
 def root():
     return {"message": "FastAPI log analysis service is up!"}
 
-@app.post("/analyze")
-async def analyze_background_job(job: JobRequest):
-    print(f"Received job: {job}")
-    # Placeholder: In next steps, fetch logs, run analysis, and maybe send alerts
-    return {"status": "Job received", "job_id": job.job_id}
 
 class ManualAnalysisRequest(BaseModel):
     service_name: str
@@ -51,7 +46,8 @@ async def manual_analyze(analysis_type: str, request: ManualAnalysisRequest):
         return {"error": f"Unknown analysis type: {analysis_type}"}
 
     try:
-        if analysis_type == "generic_log_search":
+        # These handle their own fetching internally
+        if analysis_type in ["generic_log_search", "log_pattern_timeseries"]:
             field = getattr(request, "field", "status")
             keyword = getattr(request, "keyword", "error")
             result = handler["func"](
@@ -62,6 +58,7 @@ async def manual_analyze(analysis_type: str, request: ManualAnalysisRequest):
             )
             return {"status": "success", "result": result}
 
+        # For analysis types that need logs passed to them
         logs = fetch_logs_for_service(request.service_name, range_seconds=request.range_seconds)
         if not logs:
             return {"message": "No logs found for the given service and time range."}
@@ -75,4 +72,5 @@ async def manual_analyze(analysis_type: str, request: ManualAnalysisRequest):
 
     except Exception as e:
         return {"error": str(e)}
+
 
