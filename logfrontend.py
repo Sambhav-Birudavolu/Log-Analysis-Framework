@@ -5,6 +5,7 @@ import bcrypt
 import json
 import requests
 from contextlib import contextmanager
+import pandas as pd
 
 from functions import (
     load_user_services,
@@ -38,7 +39,7 @@ def create_connection():
     try:
         conn = mysql.connector.connect(
             host='localhost',
-            user='root',
+            user='appuser',
             password='rootpwd',
             database='hpelog'
         )
@@ -354,7 +355,7 @@ def service_detail_ui(service_name):
     # Handle config per analysis type
     if selected_key == "failed_logins":
         threshold = st.number_input("Login Failure Threshold", min_value=1, value=3)
-    elif selected_key == "generic_log_search":
+    elif selected_key in ("generic_log_search", "log_pattern_timeseries"):
         field = st.text_input("Field to Search", value="status")
         keyword = st.text_input("Keyword", value="error")
         custom_config["field"] = field
@@ -369,7 +370,7 @@ def service_detail_ui(service_name):
                 }
                 if threshold:
                     payload["threshold"] = threshold
-                if selected_key == "generic_log_search":
+                if selected_key in ("generic_log_search", "log_pattern_timeseries"):
                     payload.update(custom_config)
 
                 response = requests.post(
@@ -392,7 +393,32 @@ def service_detail_ui(service_name):
                     st.markdown(f"## 📊 {applicable_analyses[selected_key]['label']}")
                     for key, val in result.items():
                         st.markdown(f"### {key}")
-                        if isinstance(val, list):
+                        if key.lower() == "time series" and isinstance(val, dict):
+                            if val:
+                                try:
+                                    df = pd.DataFrame(list(val.items()), columns=["timestamp", "count"])
+                                    df["timestamp"] = pd.to_datetime(df["timestamp"])
+                                    df.set_index("timestamp", inplace=True)
+                                    st.line_chart(df)
+                                except Exception as e:
+                                    st.error(f"Failed to render time series chart: {e}")
+                            else:
+                                st.info("No data points in time series.")
+                        elif key.lower() == "geo distribution" and isinstance(val, list):
+                            if val:
+                                try:
+                                    geo_df = pd.DataFrame(val)
+                                    if "lat" in geo_df.columns and "lon" in geo_df.columns:
+                                        st.map(geo_df[["lat", "lon"]])
+                                        with st.expander("📍 IP Details"):
+                                            st.dataframe(geo_df[["ip", "city", "count"]])
+                                    else:
+                                        st.warning("No latitude/longitude data available.")
+                                except Exception as e:
+                                    st.error(f"Error rendering geo map: {e}")
+                            else:
+                                st.info("No geolocation data available.")
+                        elif isinstance(val, list):
                             if val and isinstance(val[0], dict):
                                 with st.expander(f"View {len(val)} items"):
                                     for item in val:
