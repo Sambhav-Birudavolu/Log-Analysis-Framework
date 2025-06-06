@@ -164,10 +164,11 @@ def register_ui():
     if st.button('Already have an account? Login'):
         st.session_state.step = 'login'
         st.rerun()
-def render_analysis_result(label, result: dict):
+
+def render_analysis_result(label, result: dict, analysis_type: str):
     st.markdown(f"## 📊 {label}")
 
-    # Handle log_pattern_timeseries
+    # 1. Time series handling (log pattern timeseries, etc.)
     if "total_match_count" in result or any(k.startswith("bucket:") for k in result):
         buckets = {k[7:]: int(v) for k, v in result.items() if k.startswith("bucket:")}
         if buckets:
@@ -183,8 +184,8 @@ def render_analysis_result(label, result: dict):
         st.markdown(f"**Total Matches:** {result.get('total_match_count', 0)}")
         return
 
-    # Special display for DNS Alert stats
-    if any(k.startswith("reason:") for k in result) or any(k.startswith("domain:") for k in result):
+    # 2. Special display for DNS Alert analysis
+    if analysis_type == "dns_alerts":
         reasons = {k[7:]: v for k, v in result.items() if k.startswith("reason:")}
         domains = {k[7:]: v for k, v in result.items() if k.startswith("domain:")}
 
@@ -202,17 +203,16 @@ def render_analysis_result(label, result: dict):
         else:
             st.write("No failing domains recorded.")
 
-        # Display any other keys (e.g. alerts list) below
+        # Show other remaining keys, e.g. alerts
         others = {k: v for k, v in result.items() if not (k.startswith("reason:") or k.startswith("domain:"))}
         if others:
             st.markdown("### Other Info")
             for key, val in others.items():
                 st.markdown(f"**{key}**")
                 st.json(val if isinstance(val, (dict, list)) else str(val))
-
         return
 
-    # Default: show everything else in structured format
+    # 3. Default structured display for all other types
     for key, val in result.items():
         st.markdown(f"### {key}")
         if isinstance(val, dict):
@@ -226,7 +226,6 @@ def render_analysis_result(label, result: dict):
                 st.write(", ".join(str(x) for x in val))
         else:
             st.write(val)
-
 
 def dashboard_ui():
     st.title(f"Welcome, {st.session_state.username} 👋")
@@ -330,7 +329,11 @@ def dashboard_ui():
                             conn.close()
                 
                     if result_data:
-                        render_analysis_result(f"Job #{job['id']} – {job['analysis_type']}", result_data)
+                        render_analysis_result(
+                             f"Job #{job['id']} - {job['analysis_type']}",
+                            result_data,
+                            job['analysis_type']  # Pass this in explicitly
+                        )
                     else:
                         st.info("No result data available yet.")
 

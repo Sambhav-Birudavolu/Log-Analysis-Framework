@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 import json
 import os
 from dotenv import load_dotenv
-load_dotenv(dotenv_path=os.path.join("..", "config", ".env"))
+load_dotenv(dotenv_path=os.path.join("config", ".env"))
 
 rdb = redis.Redis(host='localhost', port=6379, decode_responses=True)
 

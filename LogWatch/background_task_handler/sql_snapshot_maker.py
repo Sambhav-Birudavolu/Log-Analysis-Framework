@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 import os
 
 # Load environment variables from .env
-load_dotenv(dotenv_path=os.path.join("..", "config", ".env"))
+load_dotenv(dotenv_path=os.path.join("config", ".env"))
 rdb = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
 def create_connection():
