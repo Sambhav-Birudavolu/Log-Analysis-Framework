@@ -7,6 +7,7 @@ import requests
 from contextlib import contextmanager
 import pandas as pd
 from datetime import datetime,timezone
+from PIL import Image
 
 from functions import (
     load_user_services,
@@ -16,7 +17,12 @@ from functions import (
 import os
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join("config", ".env"))  # Load .env variables
+import base64
 
+def get_base64_of_bin_file(bin_file):
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
 
 # Set page configuration
 st.set_page_config(
@@ -25,15 +31,80 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+bin_str=get_base64_of_bin_file("images/canvas.png")
+
 st.markdown(
-    """
+    f"""
     <style>
-    .stButton>button {
+    .stAppViewContainer{{
+        background-color: #e0f7fa;
+    }}
+    .stButton>button {{
+        background-color: #5fb962;
+        color: white;
+        font-size: 16px;
+        border-radius: 12px;
+    }}
+    [data-testid="stTextInputRootElement"] {{
+        background-color: #ffffff !important;
+        border: 1px solid #b0bec5 !important;
+        border-radius: 8px !important;
+        color: #000000 !important;
+        padding: 6px 10px;
+        width: 100% !important;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }}
+
+    [data-testid="stForm"] {{
+        background-color: rgba(141, 225, 236, 0.57);
+        width: 80% !important;
+        margin: auto;
+    }}
+    [data-testid="stHeader"] {{
+        background-color: rgba(0,0,0,0);
+    }}
+    [data-baseweb="base-input"]{{
+        background-color: #ffffff !important;
+    }}
+    [data-testid="stTextInputRootElement"]:focus-within {{
+        border: 1px solid #4CAF50 !important;
+    }}
+    [data-testid="stNumberInputContainer"]{{
+        width: 50% !important;
+    }}
+    [data-testid="stBaseButton-secondaryFormSubmit"]{{
         background-color: #4CAF50;
         color: white;
         font-size: 16px;
         border-radius: 12px;
-    }
+    }}
+    textarea, select {{
+        background-color: #ffffff !important;
+        border: 1px solid #b0bec5 !important;
+        border-radius: 8px !important;
+        color: #000000 !important;
+        
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }}
+    
+    textarea:focus, select:focus {{
+        border: 1px solid #4CAF50 !important;
+        outline: none !important;
+    }}
+    div[data-baseweb="select"] > div {{
+        background-color: #ffffff !important;
+        border: 1px solid #b0bec5 !important;
+        border-radius: 8px !important;
+        color: #000000 !important;
+
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }}
+    div[data-baseweb="select"]:focus-within {{
+        border: 1px solid #4CAF50 !important;
+    }}
+    div[data-baseweb="select"]{{
+        width: 50% !important;
+    }}
     </style>
     """,
     unsafe_allow_html=True
@@ -123,47 +194,146 @@ def register_user(username, password):
     except Error as e:
         st.error(f"Registration error: {e}")
         return False
+def main_ui():
+    _, center_col, _ = st.columns([1, 2, 1])
+
+    # Styling
+    st.markdown(f"""
+        <style>
+            .stAppViewContainer {{
+                background-image: url("data:image/png;base64,{bin_str}");
+                background-size: cover;
+            }}
+            .st-key-main_page {{
+                width: 80% !important;
+                margin: auto !important;
+            }}
+            .st-key-main_to_login,
+            .st-key-main_to_register {{
+                margin: auto !important;
+            }}
+            .custom-button-container button {{
+                font-size: 18px;
+                padding: 10px 20px;
+                border-radius: 10px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                margin: 0 15px;
+            }}
+            img[data-testid="stLogo"] {{
+                height: 10rem;
+            }}
+        </style>
+    """, unsafe_allow_html=True)
+    image = Image.open("images/logo.png")
+    st.logo(image,size="large")
+    # Sidebar "About" section
+    st.sidebar.markdown("### ℹ️ About LogWatch")
+    st.sidebar.markdown("""
+    **LogWatch** is a centralized platform for log analysis and smart alerting.  
+    It supports both **manual** and **automated** analytics, providing real-time insights from logs collected via **Graylog**.
+    
+    🔍 Use it to:
+    - Detect issues quickly  
+    - Automate routine log monitoring  
+    - Trigger alerts based on custom thresholds
+    """)
+    
+    # Sidebar "Our Team" section
+    st.sidebar.markdown("### 👥 Our Team")
+    st.sidebar.markdown("""
+    - Sambhav Birudavolu  
+    - Ananya B
+    - Srilakshmi Mothkur
+    - Shreyas s magadi 
+    - Suparna S Prasad
+    """)
+
+    with center_col:
+        st.markdown("<h2 style='text-align: center;'>Welcome to LogWatch</h2>", unsafe_allow_html=True)
+        st.markdown("""
+            <h4 style='text-align: center;'>
+                Your centralized platform for analyzing logs and setting up smart alerts.
+            </h4>
+        """, unsafe_allow_html=True)
+
+    # Button container
+    with st.container(key="main_page"):
+        col_left, col_center, col_right = st.columns([1, 2, 1])
+        with col_center:
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔐 Login", key="main_to_login"):
+                    st.session_state.step = "login"
+                    st.rerun()
+            with col2:
+                if st.button("📝 Register", key="main_to_register"):
+                    st.session_state.step = "register"
+                    st.rerun()
 
 def login_ui():
-    st.title('Login')
+    # Use columns to center content
+    _, center_col, _ = st.columns([1, 2, 1])
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+    with center_col:
+        st.markdown("<h1 style='text-align: center;'>Login</h1>", unsafe_allow_html=True)
 
-    if st.button('Login'):
-        if not username or not password:
-            st.error("Please enter both username and password.")
-        elif authenticate_user(username, password):
-            st.success("Login successful!")
-            st.session_state.step = 'dashboard'
-            st.rerun()
-        else:
-            st.error("Invalid username or password.")
+        with st.form("login_form",enter_to_submit=False):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
 
-    if st.button("Don't have an account? Register"):
-        st.session_state.step = 'register'
-        st.rerun()
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                submitted = st.form_submit_button("Login")
+            with col2:
+                switch = st.form_submit_button("Don't have an account? Register")
 
-def register_ui():
-    st.title('Register New Account')
+            if submitted:
+                if not username or not password:
+                    st.error("Please enter both username and password.")
+                elif authenticate_user(username, password):
+                    st.success("Login successful!")
+                    st.session_state.step = 'dashboard'
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password.")
 
-    username = st.text_input("Choose a Username")
-    password = st.text_input("Choose a Password", type="password")
-
-    if st.button('Register'):
-        if not username or not password:
-            st.error("Please fill out both fields.")
-        elif user_exists(username):
-            st.error("Username already exists.")
-        else:
-            if register_user(username, password):
-                st.success("Registration successful!")
-                st.session_state.step = 'dashboard'
+            if switch:
+                st.session_state.step = 'register'
                 st.rerun()
 
-    if st.button('Already have an account? Login'):
-        st.session_state.step = 'login'
-        st.rerun()
+def register_ui():
+    _, center_col, _ = st.columns([1, 2, 1])
+
+    with center_col:
+        st.markdown("<h1 style='text-align: center;'>Register New Account</h1>", unsafe_allow_html=True)
+
+        with st.form("register_form",enter_to_submit=False):
+            username = st.text_input("Choose a Username")
+            password = st.text_input("Choose a Password", type="password")
+
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                submitted = st.form_submit_button("Register")
+            with col2:
+                switch = st.form_submit_button("Already have an account? Login")
+
+            if submitted:
+                if not username or not password:
+                    st.error("Please fill out both fields.")
+                elif user_exists(username):
+                    st.error("Username already exists.")
+                else:
+                    if register_user(username, password):
+                        st.success("Registration successful!")
+                        st.session_state.step = 'dashboard'
+                        st.rerun()
+
+            if switch:
+                st.session_state.step = 'login'
+                st.rerun()
+
 
 def render_analysis_result(label, result: dict, analysis_type: str):
     st.markdown(f"## 📊 {label}")
@@ -229,7 +399,10 @@ def render_analysis_result(label, result: dict, analysis_type: str):
 
 def dashboard_ui():
     st.title(f"Welcome, {st.session_state.username} 👋")
-
+    st.markdown("""<style>
+    [data-testid="stTextInputRootElement"] {
+        width: 50% !important;
+    }</style>""", unsafe_allow_html=True)
     new_service = st.text_input("Enter a microservice name")
 
     col1, col2 = st.columns([1, 1])
@@ -344,7 +517,6 @@ def dashboard_ui():
         st.info("Add at least one microservice to create a background job.")
         return
 
-    # Service selector with state
     if "bg_selected_service" not in st.session_state:
         st.session_state.bg_selected_service = st.session_state.service_list[0]
 
@@ -354,7 +526,6 @@ def dashboard_ui():
         key="bg_selected_service"
     )
 
-    # Filter alertable options
     alertable_only = st.checkbox("Show only alert-capable analyses?", key="bg_alertable_only")
 
     available_analysis = {
@@ -380,11 +551,9 @@ def dashboard_ui():
 
     selected_handler = available_analysis[analysis_type_key]
 
-    # Alert state tracking
     if "bg_alert_enabled" not in st.session_state:
         st.session_state.bg_alert_enabled = False
 
-    # Auto-enable if filtering alertable only
     if alertable_only:
         st.session_state.bg_alert_enabled = True
     else:
@@ -393,64 +562,61 @@ def dashboard_ui():
         else:
             st.session_state.bg_alert_enabled = False
 
-    with st.form("job_form"):
-        interval = st.number_input("Interval (in seconds)", min_value=5, max_value=86400, value=60, step=1)
+    interval = st.number_input("Interval (in seconds)", min_value=5, max_value=86400, value=60, step=1)
 
-        alert_channel = ""
-        alert_target = ""
-        threshold = None
+    alert_channel = ""
+    alert_target = ""
+    threshold = None
 
-        if st.session_state.bg_alert_enabled:
-            alert_channel = st.selectbox("Alert Channel", ["email", "slack"], key="bg_alert_channel")
-            alert_target = st.text_input("Alert Target (email or webhook)", key="bg_alert_target")
+    if st.session_state.bg_alert_enabled:
+        alert_channel = st.selectbox("Alert Channel", ["email", "slack"], key="bg_alert_channel")
+        alert_target = st.text_input("Alert Target (email or webhook)", key="bg_alert_target")
 
-        query = None
-        if selected_handler.get("configurable"):
-            field = st.text_input("Field to search within (e.g., status)", value="status")
-            keyword = st.text_input("Keyword to search for", value="ERROR")
+    query = None
+    if selected_handler.get("configurable"):
+        field = st.text_input("Field to search within (e.g., status)", value="status")
+        keyword = st.text_input("Keyword to search for", value="ERROR")
 
-            if field and keyword:
-                query = f"{field}:{keyword}"
-            else:
-                st.warning("Both field and keyword are required for query-based analyses.")
+        if field and keyword:
+            query = f"{field}:{keyword}"
+        else:
+            st.warning("Both field and keyword are required for query-based analyses.")
 
-            if selected_handler.get("alertable", False):
-                threshold = st.number_input("Alert Threshold", min_value=1, value=10)
+        if selected_handler.get("alertable", False):
+            threshold = st.number_input("Alert Threshold", min_value=1, value=10)
 
-        submit = st.form_submit_button("Create Job")
+    if st.button("Create Job"):
+        conn = create_connection()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        if submit:
-            conn = create_connection()
-            if conn:
-                try:
-                    cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO background_jobs (
+                        username, service_name, analysis_type, interval_seconds,
+                        alert_enabled, alert_channel, alert_target, last_run, query, threshold
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    st.session_state.username,
+                    selected_service,
+                    analysis_type_key,
+                    interval,
+                    st.session_state.bg_alert_enabled,
+                    alert_channel,
+                    alert_target,
+                    current_time,
+                    query,
+                    threshold
+                ))
 
-                    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                conn.commit()
+                conn.close()
+                st.success("Background job created!")
+                st.rerun()
+            except Error as e:
+                st.error(f"Error creating job: {e}")
 
-                    cursor.execute("""
-                        INSERT INTO background_jobs (
-                            username, service_name, analysis_type, interval_seconds,
-                            alert_enabled, alert_channel, alert_target, last_run, query, threshold
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        st.session_state.username,
-                        selected_service,
-                        analysis_type_key,
-                        interval,
-                        st.session_state.bg_alert_enabled,
-                        alert_channel,
-                        alert_target,
-                        current_time,
-                        query,
-                        threshold
-                    ))
-
-                    conn.commit()
-                    conn.close()
-                    st.success("Background job created!")
-                    st.rerun()
-                except Error as e:
-                    st.error(f"Error creating job: {e}")
 
 def service_detail_ui(service_name):
     st.title(f"🔍 Logs for `{service_name}`")
@@ -581,9 +747,12 @@ def service_detail_ui(service_name):
 
 # ---------------- Navigation Logic ---------------- #
 if 'step' not in st.session_state:
-    st.session_state.step = 'login'
+    st.session_state.step = 'main'
+
 if 'selected_service' in st.session_state and st.session_state.selected_service:
     service_detail_ui(st.session_state.selected_service)
+elif st.session_state.step == 'main':
+    main_ui()
 elif st.session_state.step == 'login':
     login_ui()
 elif st.session_state.step == 'register':
