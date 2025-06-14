@@ -279,28 +279,90 @@ def login_ui():
     with center_col:
         st.markdown("<h1 style='text-align: center;'>Login</h1>", unsafe_allow_html=True)
 
-        with st.form("login_form",enter_to_submit=False):
+        with st.form("login_form", enter_to_submit=False):
             username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
+            password = st.text_input("Password", type='password')
 
             col1, col2 = st.columns([1, 1])
             with col1:
                 submitted = st.form_submit_button("Login")
             with col2:
-                switch = st.form_submit_button("Don't have an account? Register")
+                register = st.form_submit_button("Don't have an account? Register")
+
+        if submitted:
+            if not username or not password:
+                st.error("Please enter both username and password.")
+            elif authenticate_user(username, password):
+                st.success("Login successful.")
+                st.session_state.step = 'dashboard'
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+        
+        if register:
+            st.session_state.step = 'register'
+            st.rerun()
+
+        # NEW ADDITION HERE
+        if st.button("Reset Password?"):
+            st.session_state.step = "reset_password"
+            st.rerun()
+
+
+def reset_password(username, new_password):
+    conn = create_connection()
+    if not conn:
+        return False
+    
+    try:
+        hashed = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()) 
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET password = %s WHERE username = %s", (hashed, username))
+        conn.commit()
+        st.success("Password reset successfully.")
+        return True
+    except Error as e:
+        st.error(f"Error while resetting password: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def reset_password_ui():
+    _, center_col, _ = st.columns([1, 2, 1])
+
+    with center_col:
+        st.markdown("<h1 style='text-align: center;'>Reset Password</h1>", unsafe_allow_html=True)
+
+        with st.form("reset_form", enter_to_submit=False):
+            username = st.text_input("Username")
+            new_pass = st.text_input("New Password", type='password')
+            confirm_pass = st.text_input("Confirm Password", type='password')
+
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                submitted = st.form_submit_button("Reset Password")
+            with col2:
+                back = st.form_submit_button("Back to Login")
 
             if submitted:
-                if not username or not password:
-                    st.error("Please enter both username and password.")
-                elif authenticate_user(username, password):
-                    st.success("Login successful!")
-                    st.session_state.step = 'dashboard'
-                    st.rerun()
+                if not username or not new_pass or not confirm_pass:
+                    st.error("All fields are required.")
+                elif new_pass == confirm_pass:
+                    if user_exists(username):
+                        if reset_password(username, new_pass):
+                            st.success("Password reset successfully.")
+                            st.session_state.step = 'login'
+                            st.rerun()
+                        else:
+                            st.error("Failed to reset password.")
+                    else:
+                        st.error("Username not found.")
                 else:
-                    st.error("Invalid username or password.")
-
-            if switch:
-                st.session_state.step = 'register'
+                    st.error("Passwords do not match.")
+                                
+            if back:
+                st.session_state.step = 'login'
                 st.rerun()
 
 def register_ui():
@@ -755,6 +817,8 @@ elif st.session_state.step == 'main':
     main_ui()
 elif st.session_state.step == 'login':
     login_ui()
+elif st.session_state.step == 'reset_password':
+    reset_password_ui()
 elif st.session_state.step == 'register':
     register_ui()
 elif st.session_state.step == 'dashboard':
