@@ -278,16 +278,24 @@ def login_ui():
 
     with center_col:
         st.markdown("<h1 style='text-align: center;'>Login</h1>", unsafe_allow_html=True)
-
+        st.markdown(f"""
+        <style>
+        [data-testid="stFormSubmitButton"]{{
+        width: 100% !important;
+        margin: auto;
+        }}</style>
+        """, unsafe_allow_html=True)
         with st.form("login_form", enter_to_submit=False):
             username = st.text_input("Username")
             password = st.text_input("Password", type='password')
 
-            col1, col2 = st.columns([1, 1])
+            col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
                 submitted = st.form_submit_button("Login")
             with col2:
-                register = st.form_submit_button("Don't have an account? Register")
+                register = st.form_submit_button("Don't have an account? Register",type="tertiary")
+            with col3:
+                reset= st.form_submit_button("Reset Password?")
 
         if submitted:
             if not username or not password:
@@ -304,7 +312,7 @@ def login_ui():
             st.rerun()
 
         # NEW ADDITION HERE
-        if st.button("Reset Password?"):
+        if reset:
             st.session_state.step = "reset_password"
             st.rerun()
 
@@ -333,7 +341,13 @@ def reset_password_ui():
 
     with center_col:
         st.markdown("<h1 style='text-align: center;'>Reset Password</h1>", unsafe_allow_html=True)
-
+        st.markdown(f"""
+        <style>
+        [data-testid="stFormSubmitButton"]{{
+        width: 60% !important;
+        margin: auto;
+        }}</style>
+        """, unsafe_allow_html=True)
         with st.form("reset_form", enter_to_submit=False):
             username = st.text_input("Username")
             new_pass = st.text_input("New Password", type='password')
@@ -343,7 +357,7 @@ def reset_password_ui():
             with col1:
                 submitted = st.form_submit_button("Reset Password")
             with col2:
-                back = st.form_submit_button("Back to Login")
+                back = st.form_submit_button("Return to Login")
 
             if submitted:
                 if not username or not new_pass or not confirm_pass:
